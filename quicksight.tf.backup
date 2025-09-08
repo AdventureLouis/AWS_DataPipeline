@@ -1,0 +1,356 @@
+# Get current AWS account ID for QuickSight resources
+data "aws_caller_identity" "current" {}
+
+# QuickSight Data Source - Automated Configuration
+resource "aws_quicksight_data_source" "csv_pipeline_datasource" {
+  aws_account_id = data.aws_caller_identity.current.account_id
+  data_source_id = "csv-pipeline-datasource"
+  name           = "CSV Pipeline Data Source"
+  type           = "S3"
+
+  parameters {
+    s3 {
+      manifest_file_location {
+        bucket = aws_s3_bucket.final.bucket
+        key    = "manifest.json"
+      }
+    }
+  }
+
+  permission {
+    principal = "arn:aws:quicksight:${var.region}:${data.aws_caller_identity.current.account_id}:user/default/loui_IAM"
+    actions   = [
+      "quicksight:DescribeDataSource",
+      "quicksight:DescribeDataSourcePermissions",
+      "quicksight:PassDataSource",
+      "quicksight:UpdateDataSource",
+      "quicksight:DeleteDataSource",
+      "quicksight:UpdateDataSourcePermissions"
+    ]
+  }
+
+  depends_on = [aws_s3_object.quicksight_manifest]
+}
+
+# QuickSight Data Set - Automated Configuration
+resource "aws_quicksight_data_set" "csv_pipeline_dataset" {
+  aws_account_id = data.aws_caller_identity.current.account_id
+  data_set_id    = "csv-pipeline-dataset"
+  name           = "CSV Pipeline Dataset"
+  import_mode    = "SPICE"
+
+  physical_table_map {
+    physical_table_map_id = "csv-pipeline-physical-table"
+    s3_source {
+      upload_settings {
+        format = "CSV"
+        start_from_row = 1
+        contains_header = true
+        delimiter = ","
+        text_qualifier = "DOUBLE_QUOTE"
+      }
+
+      data_source_arn = aws_quicksight_data_source.csv_pipeline_datasource.arn
+      input_columns {
+        name = "age"
+        type = "STRING"
+      }
+      input_columns {
+        name = "sex"
+        type = "STRING"
+      }
+      input_columns {
+        name = "bmi"
+        type = "STRING"
+      }
+      input_columns {
+        name = "children"
+        type = "STRING"
+      }
+      input_columns {
+        name = "smoker"
+        type = "STRING"
+      }
+      input_columns {
+        name = "region"
+        type = "STRING"
+      }
+      input_columns {
+        name = "charges"
+        type = "STRING"
+      }
+      input_columns {
+        name = "processed_timestamp"
+        type = "STRING"
+      }
+    }
+  }
+
+  permissions {
+    principal = "arn:aws:quicksight:${var.region}:${data.aws_caller_identity.current.account_id}:user/default/loui_IAM"
+    actions   = [
+      "quicksight:DescribeDataSet",
+      "quicksight:DescribeDataSetPermissions",
+      "quicksight:PassDataSet",
+      "quicksight:DescribeIngestion",
+      "quicksight:ListIngestions",
+      "quicksight:UpdateDataSet",
+      "quicksight:DeleteDataSet",
+      "quicksight:CreateIngestion",
+      "quicksight:CancelIngestion",
+      "quicksight:UpdateDataSetPermissions"
+    ]
+  }
+
+  depends_on = [aws_quicksight_data_source.csv_pipeline_datasource]
+}
+
+# Create manifest file for QuickSight
+resource "aws_s3_object" "quicksight_manifest" {
+  bucket = aws_s3_bucket.final.bucket
+  key    = "manifest.json"
+  content = jsonencode({
+    fileLocations = [
+      {
+        URIPrefixes = [
+          "s3://${aws_s3_bucket.final.bucket}/final-data-csv/"
+        ]
+      }
+    ]
+    globalUploadSettings = {
+      format = "CSV"
+      delimiter = ","
+      textqualifier = "\""
+      containsHeader = "true"
+    }
+  })
+  content_type = "application/json"
+}
+
+# Lambda function to create QuickSight donut chart automatically
+resource "aws_lambda_function" "quicksight_chart_creator" {
+  filename         = "quicksight_chart.zip"
+  function_name    = "quicksight-donut-chart-creator"
+  role            = aws_iam_role.lambda_role.arn
+  handler         = "quicksight_chart.lambda_handler"
+  runtime         = "python3.9"
+  timeout         = 300
+  memory_size     = 512
+
+  depends_on = [data.archive_file.quicksight_chart_zip]
+}
+
+# Create QuickSight chart creation script
+data "archive_file" "quicksight_chart_zip" {
+  type        = "zip"
+  output_path = "quicksight_chart.zip"
+  source {
+    content = <<EOF
+import json
+import boto3
+import time
+
+def lambda_handler(event, context):
+    quicksight = boto3.client('quicksight')
+    account_id = context.invoked_function_arn.split(':')[4]
+    
+    try:
+        # First, delete existing analysis if it exists
+        try:
+            quicksight.delete_analysis(
+                AwsAccountId=account_id,
+                AnalysisId='medical-cost-analysis',
+                ForceDeleteWithoutRecovery=True
+            )
+            print("Deleted existing analysis")
+            time.sleep(2)  # Wait for deletion to complete
+        except Exception as e:
+            print(f"No existing analysis to delete: {str(e)}")
+        
+        # Create analysis with donut chart and your user as owner
+        response = quicksight.create_analysis(
+            AwsAccountId=account_id,
+            AnalysisId='medical-cost-analysis',
+            Name='Medical Cost Analysis',
+            Definition={
+                'DataSetIdentifierDeclarations': [{
+                    'DataSetArn': f'arn:aws:quicksight:${var.region}:{account_id}:dataset/csv-pipeline-dataset',
+                    'Identifier': 'dataset1'
+                }],
+                'Sheets': [{
+                    'SheetId': 'sheet1',
+                    'Name': 'Medical Cost Dashboard',
+                    'Visuals': [{
+                        'PieChartVisual': {
+                            'VisualId': 'donut-chart-1',
+                            'Title': {
+                                'Visibility': 'VISIBLE',
+                                'FormatText': {
+                                    'PlainText': 'Medical Cost of Smokers and Non-Smokers'
+                                }
+                            },
+                            'ChartConfiguration': {
+                                'FieldWells': {
+                                    'PieChartAggregatedFieldWells': {
+                                        'Category': [{
+                                            'CategoricalDimensionField': {
+                                                'FieldId': 'smoker-field',
+                                                'Column': {
+                                                    'DataSetIdentifier': 'dataset1',
+                                                    'ColumnName': 'smoker'
+                                                }
+                                            }
+                                        }],
+                                        'Values': [{
+                                            'NumericalMeasureField': {
+                                                'FieldId': 'charges-field',
+                                                'Column': {
+                                                    'DataSetIdentifier': 'dataset1',
+                                                    'ColumnName': 'charges'
+                                                },
+                                                'AggregationFunction': {
+                                                    'SimpleNumericalAggregation': 'AVERAGE'
+                                                }
+                                            }
+                                        }]
+                                    }
+                                },
+                                'DonutOptions': {
+                                    'ArcOptions': {
+                                        'ArcThickness': 'MEDIUM'
+                                    }
+                                },
+                                'DataLabels': {
+                                    'Visibility': 'VISIBLE',
+                                    'LabelContent': 'PERCENT'
+                                },
+                                'Legend': {
+                                    'Visibility': 'VISIBLE',
+                                    'Position': 'RIGHT'
+                                }
+                            }
+                        }
+                    }]
+                }]
+            },
+            Permissions=[
+                {
+                    'Principal': f'arn:aws:quicksight:${var.region}:{account_id}:user/default/loui_IAM',
+                    'Actions': [
+                        'quicksight:RestoreAnalysis',
+                        'quicksight:UpdateAnalysisPermissions',
+                        'quicksight:DeleteAnalysis',
+                        'quicksight:QueryAnalysis',
+                        'quicksight:DescribeAnalysisPermissions',
+                        'quicksight:DescribeAnalysis',
+                        'quicksight:UpdateAnalysis'
+                    ]
+                }
+            ]
+        )
+        
+        print(f"Analysis created successfully with ID: {response['AnalysisId']}")
+        print(f"Analysis ARN: {response['Arn']}")
+        print(f"Creation Status: {response['CreationStatus']}")
+        
+        # Refresh the dataset to ensure data is available
+        try:
+            refresh_response = quicksight.create_ingestion(
+                DataSetId='csv-pipeline-dataset',
+                IngestionId=f'refresh-{int(time.time())}',
+                AwsAccountId=account_id
+            )
+            print(f"Dataset refresh initiated: {refresh_response['IngestionId']}")
+            
+            # Wait for dataset refresh to complete
+            for i in range(30):  # Wait up to 5 minutes
+                time.sleep(10)
+                ingestion_status = quicksight.describe_ingestion(
+                    DataSetId='csv-pipeline-dataset',
+                    IngestionId=refresh_response['IngestionId'],
+                    AwsAccountId=account_id
+                )
+                status = ingestion_status['Ingestion']['IngestionStatus']
+                print(f"Dataset refresh status: {status}")
+                
+                if status == 'COMPLETED':
+                    print("Dataset refresh completed successfully")
+                    break
+                elif status == 'FAILED':
+                    print(f"Dataset refresh failed: {ingestion_status['Ingestion'].get('ErrorInfo', 'Unknown error')}")
+                    break
+                    
+        except Exception as e:
+            print(f"Dataset refresh error: {str(e)}")
+        
+        # Wait for analysis to be ready
+        time.sleep(5)
+        
+        # Create a dashboard from the analysis for better access
+        try:
+            dashboard_response = quicksight.create_dashboard(
+                AwsAccountId=account_id,
+                DashboardId='medical-cost-dashboard',
+                Name='Medical Cost Dashboard',
+                SourceEntity={
+                    'SourceTemplate': {
+                        'DataSetReferences': [{
+                            'DataSetArn': f'arn:aws:quicksight:${var.region}:{account_id}:dataset/csv-pipeline-dataset',
+                            'DataSetPlaceholder': 'dataset1'
+                        }],
+                        'Arn': f'arn:aws:quicksight:${var.region}:{account_id}:analysis/medical-cost-analysis'
+                    }
+                },
+                Permissions=[
+                    {
+                        'Principal': f'arn:aws:quicksight:${var.region}:{account_id}:user/default/loui_IAM',
+                        'Actions': [
+                            'quicksight:DescribeDashboard',
+                            'quicksight:ListDashboardVersions',
+                            'quicksight:UpdateDashboardPermissions',
+                            'quicksight:QueryDashboard',
+                            'quicksight:UpdateDashboard',
+                            'quicksight:DeleteDashboard',
+                            'quicksight:DescribeDashboardPermissions',
+                            'quicksight:UpdateDashboardPublishedVersion'
+                        ]
+                    }
+                ]
+            )
+            print(f"Dashboard created: {dashboard_response['DashboardId']}")
+        except Exception as e:
+            print(f"Dashboard creation error: {str(e)}")
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': 'Donut chart created successfully!',
+                'analysis_url': f'https://${var.region}.quicksight.aws.amazon.com/sn/analyses/medical-cost-analysis',
+                'dashboard_url': f'https://${var.region}.quicksight.aws.amazon.com/sn/dashboards/medical-cost-dashboard',
+                'analysis_id': 'medical-cost-analysis',
+                'dashboard_id': 'medical-cost-dashboard',
+                'manual_access': 'Go to QuickSight -> Datasets -> CSV Pipeline Dataset -> Create analysis to access the chart'
+            })
+        }
+        
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps(f'Error creating chart: {str(e)}')
+        }
+EOF
+    filename = "quicksight_chart.py"
+  }
+}
+
+# Trigger chart creation after dataset is ready
+resource "aws_lambda_invocation" "create_donut_chart" {
+  function_name = aws_lambda_function.quicksight_chart_creator.function_name
+  
+  input = jsonencode({
+    trigger = "create_chart"
+  })
+  
+  depends_on = [aws_quicksight_data_set.csv_pipeline_dataset]
+}

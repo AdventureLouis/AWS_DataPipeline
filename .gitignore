@@ -1,0 +1,15 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+*.tfplan.*
+backup_old_config
+
+# Lambda deployment packages
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
