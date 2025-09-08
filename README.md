@@ -117,5 +117,13 @@ The chart visualizes medical costs comparing smokers vs non-smokers with:
 - Average charges aggregation by smoker status
 
 ## Support
-
 This optimized pipeline is designed for efficient data processing and visualization with minimal AWS resource usage.
+
+
+#Video Demo
+
+
+
+https://github.com/user-attachments/assets/4cc624d5-a146-49be-80b5-ca2c3bdaf164
+
+
