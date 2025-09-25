@@ -120,10 +120,14 @@ The chart visualizes medical costs comparing smokers vs non-smokers with:
 This optimized pipeline is designed for efficient data processing and visualization with minimal AWS resource usage.
 
 
-#Video Demo
-
-
+**Video Demo**
 
 https://github.com/user-attachments/assets/4cc624d5-a146-49be-80b5-ca2c3bdaf164
+
+
+**Architecture**
+
+![Architecture](https://github.com/user-attachments/assets/875fb2da-2748-4e03-aa86-5a93c7f7fa91)
+
 
 
