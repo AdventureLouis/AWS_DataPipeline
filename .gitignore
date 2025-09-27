@@ -7,6 +7,8 @@ terraform.tfstate.backup
 *.tfplan.*
 backup_old_config
 OPTIMIZATION_SUMMARY.md
+variable.tf
+
 
 # Lambda deployment packages
 *.zip

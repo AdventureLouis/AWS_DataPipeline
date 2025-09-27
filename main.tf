@@ -1,5 +1,3 @@
-# Optimized Serverless Data Pipeline for CSV Processing with Donut Chart Visualization
-# Simplified architecture following Guido van Rossum's principles
 
 terraform {
   required_version = ">= 1.0"
